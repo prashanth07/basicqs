@@ -8,7 +8,7 @@ SRC_DIR=./src
 UTIL_DIR=./util
 
 basicqs : main.o factorize.o factor_base.o  gaussian.o
-	gcc $(CFLAGS) -o basicqs $(SRC_DIR)/main.o $(SRC_DIR)/factorize.o $(SRC_DIR)/factor_base.o $(SRC_DIR)/gaussian.o -lm -lgmp -lpthread
+	gcc $(CFLAGS) -o basicqs main.o factorize.o factor_base.o gaussian.o -lm -lgmp -lpthread
 
 main.o : $(SRC_DIR)/main.c $(SRC_DIR)/qfs.h
 	gcc -c $(CFLAGS) -Wall $(SRC_DIR)/main.c
