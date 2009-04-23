@@ -1,0 +1,31 @@
+ABOUT:
+	This code is a result of hobby programming during 3rd year of my degree (bachelor of engineering), if u want to factorize seriously large numbers better consider one of these : ggnfs (implements number field sieve) or msieve (implements self initializing mutiple polynomial quadratic sieve).
+
+	This code Implements the Basic Quadratic Sieve, and uses Gaussian elimination method at the final stage.
+	User can control the amount the memory used, no of primes to be used, etc .....see --help option
+
+
+REQUIREMENTS:
+        Basic programming environment (gcc, make, etc....) and gmp library.
+
+
+COMPILING:
+	make basiqs
+	make rsa
+
+
+USAGE:
+	1> "rsa <number of bits>" can be used to generate composite numbers for testing
+	2> see output of "basicqs --help" for ways to use basicqs to factorize numbers.
+
+LICENSE: 
+	GPL V2 or any later versions.
+
+
+ACKNOWLEDGEMENTS:
+	I would like to thank our mathematics teacher Dr.C.S.Yogananda for helping us in understanding the number theory basics and encouraging us to try implementing quadratic sieve.
+
+
+AUTHOR:
+	Prashanth P (SJCE, Mysore)
+	prashanth07@gmail.com
