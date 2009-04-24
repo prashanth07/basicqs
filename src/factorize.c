@@ -1,3 +1,4 @@
+
 /*
  *All the functions in this file deals with factorizing using erthostenes sieve 
  *Functions:
@@ -14,12 +15,13 @@
 /*For some common definations*/
 #include "qfs.h"
 
-static inline void repete (struct node **ptr, const int offset, const int step, const int pr,
+static inline void repete (register struct node **ptr, const int offset, const int step, const int pr,
 			  const int idx, const int mask);
-			  
-static inline void trail (struct node **ptr, const int offset, const int pr,
-			const int idx, const int mask);
-			
+
+static inline void trail (struct node *ptr, const int pr, const int idx, const int mask);
+
+static void eratosthenes (struct node **start, int *prime, int B);
+
 static void *threaded_factorize (void *param);
 
 
@@ -39,16 +41,9 @@ struct thread_data{
 	int B;
 };
 
-/*A mutex to prevent race condition*/
-pthread_mutex_t mutex_a = PTHREAD_MUTEX_INITIALIZER;
-
 /*
- *NOTE:Different threads are handling differnt primes so it is enough to lock the mutex 
- *     only while updating the values associated with struct node array
- *
- *	i.e if a number X is divisible by say thread1 and it is also divisible by thread2 even then
- *	there cannot be a race condition as the factors by which it is divisible wiil be different
- *	set_of_primes(thread1) INTERSECTION set_of_primes(thread2) = NULL
+ *NOTE:Different threads are handling differnt elements of struct node array
+ *     so there can be no race condition => no mutex required
  */
 
 
@@ -61,7 +56,7 @@ pthread_mutex_t mutex_a = PTHREAD_MUTEX_INITIALIZER;
 
 struct node **build_arr (mpz_t offset, int v_size)
 {
-	struct node **p,**t;
+	struct node **p;
 	register unsigned int i;
 	mpz_t seed;
 	
@@ -74,23 +69,24 @@ struct node **build_arr (mpz_t offset, int v_size)
 	
 	//Allocate and initialize the various elements of struct
 	for (i=0 ;i<sieve_offset ;i++){
-		t=p+i;
+		register struct node *t;
 		//allocate memory for structure
-		(*t) = malloc (sizeof(struct node));
-		mpz_init ((*t)->q_x);
-		mpz_init ((*t)->m);
+		t = malloc (sizeof(struct node));
+		mpz_init (t->q_x);
+		mpz_init (t->m);
 		
 		//set m
-		mpz_set ((*t)->m, offset);
-		mpz_add_ui ((*t)->m, (*t)->m, i);
+		mpz_set (t->m, offset);
+		mpz_add_ui ((t)->m, (t)->m, i);
 		
 		//calculate q_x
-		mpz_add ((*t)->q_x, seed, (*t)->m);
-		mpz_mul ((*t)->q_x, (*t)->q_x, (*t)->q_x);
-		mpz_sub ((*t)->q_x, (*t)->q_x, qfs_num);
+		mpz_add (t->q_x, seed, t->m);
+		mpz_mul (t->q_x, t->q_x, t->q_x);
+		mpz_sub (t->q_x, t->q_x, qfs_num);
 		
 		//allocate for the vector v and set it to zero
-		(*t)->v = calloc(v_size, sizeof(int));
+		(t)->v = calloc(v_size, sizeof(int));
+		*(p+i)=t;
 	}
 	
 	mpz_clear (seed);
@@ -111,6 +107,10 @@ void factorize (struct node **start, int *prime, int B)
 	pthread_t *thread_id;			//array of thread id's
 	struct thread_data **thread_args;	//thread_arguments
 		
+	
+	//run eratosthenes algorithm 
+	eratosthenes (start, prime, B);
+	
 	//allocate space to store the thread id's
 	thread_id = malloc (sizeof (pthread_t) * nthread);
 	//allocate space for the pointers of thread data
@@ -132,12 +132,12 @@ void factorize (struct node **start, int *prime, int B)
 	
 	
 	/*join all the threads*/
-	for (i=0 ; i<nthread ;i++) 
+	for (i=0 ; i<nthread ;i++) {
 		pthread_join (thread_id[i], NULL);
-	
-	//free the thread data structures
-	for (i=0 ;i<nthread ;i++)
+		//free the thread data structures
 		free (*(thread_args+i));
+	}
+	
 	
 	free (thread_id);
 	free (thread_args);
@@ -146,71 +146,58 @@ void factorize (struct node **start, int *prime, int B)
 
 
 /*
- *threaded function control will be passsed to this function on thread creation
- *NOTE:Each threaded function handles only a unique set of primes
+ *This function implements eratosthenes sieve
  */
 
-static void *threaded_factorize (void *param)
+static void eratosthenes (struct node **start, int *prime, int B)
 {
 	int i=0,j=0;
 	int level,step;
 	int t1;
-	const struct thread_data *td = (struct thread_data *)param;
 	
 	//current word accessing in v
-	int idx;
+	int idx=0;
 	//masks the current bit accessed in a word
-	int mask;
+	int mask=1;
 
 	
 	struct node **temp;
 	
-	idx = td->thread_idx;
-	mask = 1;
-	i = td->thread_idx * WORD_SIZE;
-	
-	
-	for ( ; i < td->B ; i++){
-		temp = td->start;
-
-		//On wordsize boundaries execute the loop
-		if ((i % WORD_SIZE == 0) && (i != (td->thread_idx * WORD_SIZE) ) ) {
-			//go to next word or element in v[] which should be handled by this thread
-			idx = idx + nthread;
-			
-			mask=1;		//reinitialize mask to point to bit 0
-			
-			//skip the primes which should not be handled by this thread
-			i = i + (nthread-1) * WORD_SIZE;
-			
-			//this thread  has completed its job
-			if (i >= td->B)
-				return NULL;
-		}
+	for (i=0 ; i < B ; i++){
+		temp = start;
 		
+		/*if sieve_offset is smaller than the largest prime in prime set
+		 *then we may have a segmentation fault
+		 *
+		 *i!=0 is reqd bcoz say sieve_offset=10000 and *(prime+i)=-1 (treated as unsigned int in comparision)
+		 *in the above case the we get no factors
+		 */
+		if (sieve_offset < *(prime+i) && i!=0 )
+			break;
+		//On wordsize boundaries execute the loop
+		if ((i % WORD_SIZE == 0) && (i != 0) ) {
+			//icrement to point to next word
+			idx++;
+			//reinitialize mask to point to bit 0
+			mask=1;
+		}
 		
 		if (!i) {
 			/*if a number is negative make it positive and update vector*/
 			t1 = sieve_offset;
 			while (t1--) {
 				if (mpz_sgn ((*temp)->q_x) < 0) {
-					///mutex LOCK
-					pthread_mutex_lock (& mutex_a);
-					
 					mpz_neg ((*temp)->q_x, (*temp)->q_x);		//update q_x
 					(*temp)->v[idx] = (*temp)->v[idx] ^ mask;	//update v
-					
-					///UNLOCK mutex
-					pthread_mutex_unlock (& mutex_a);
 				}
 				temp++;
 			}
 		}
 		else {
 			level=0;
-			for (j=0; j<sieve_offset ;j++){
+			for (j=0; j < *(prime+i) ;j++){
 				//if number is not divisable continue
-				if (!mpz_divisible_ui_p((*(temp+j))->q_x, *(td->prime+i)))
+				if (!mpz_divisible_ui_p((*(temp+j))->q_x, *(prime+i)))
 					continue;
 				//the number is divisble
 				else {
@@ -219,30 +206,56 @@ static void *threaded_factorize (void *param)
 					 */
 					level=0;
 					
-					while ((!level) || mpz_divisible_ui_p ((*(temp+j))->q_x, *(td->prime+i)) ) {
+					while ((!level) || mpz_divisible_ui_p ((*(temp+j))->q_x, *(prime+i)) ) {
+						
 						level++;
-						step = pow (*(td->prime+i),level);
+						step = pow (*(prime+i),level);
 						
-						if (j < *(td->prime+i)){
-							//Erathosthenes sieve
-							repete (temp ,j ,step ,*(td->prime+i)
-									,idx, mask);
-						}
-						else {
-							//trail division
-							trail (temp ,j ,*(td->prime+i), idx, mask);
-							break;
-						}
-						
+						//divide the rest of the series
+						repete (temp ,j ,step ,*(prime+i),idx, mask);
 					}
 				}
 			}
 		}
-		mask = mask << 1;		//update mask for next prime
+		mask = mask << 1;	//update mask for next prime
+	}
+}
+
+
+
+
+static void *threaded_factorize (void *param)
+{
+	unsigned long int i;
+	unsigned long int j;
+	int mask,idx;
+	
+	struct thread_data *td;
+	
+	td = (struct thread_data *) param;
+		
+	for (i=td->thread_idx ; i < sieve_offset ; i += nthread){
+		//value of ptr is const and not the value pointed by it
+		register struct node * const ptr = *(td->start + i);
+		
+		/*j=0 corresponds to -1 so skip it*/
+		idx = 0;
+		//mask =2 as we are skipping -1 corresponding to mask=1
+		mask = 2;
+		
+		for (j=1 ; j < td->B ; j++) {
+			
+			//we need not check for j!=0 as in eratosthenes for obvoius reasons
+			if (j % WORD_SIZE == 0 ) {
+				idx++;
+				mask=1;
+			}
+			trail (ptr, *(td->prime + j), idx,mask);
+			mask = mask << 1;
+		}
 	}
 	return NULL;
 }
-
 
 
 /*
@@ -252,19 +265,14 @@ static void *threaded_factorize (void *param)
  *pr --present prime we r dealing
  */
 
-static inline void trail(struct node **ptr,const int offset,const int pr,
-			  const int idx,const int mask)
+static inline void trail (struct node * const ptr,  const int pr,
+			  const int idx,  const int mask)
 {
-	while( mpz_divisible_ui_p ((*(ptr+offset))->q_x, pr)) {
-		
-		///LOCK the mutex as we changing the value realted to struct node array
-		pthread_mutex_lock (& mutex_a);
-		
-		mpz_tdiv_q_ui ((*(ptr+offset))->q_x,  (*(ptr+offset))->q_x  ,pr);		//update q_x
-		(*(ptr+offset))->v[idx] = (*(ptr+offset))->v[idx] ^ mask;	//update v
-		
-		///UNLOCK the mutex
-		pthread_mutex_unlock (& mutex_a);
+	while( mpz_divisible_ui_p (ptr->q_x, pr)) {
+		//update q_x
+		mpz_divexact_ui ( (ptr)->q_x,  (ptr)->q_x  ,pr);
+		//update v
+		(ptr)->v[idx] = (ptr)->v[idx] ^ mask;
 	}
 }
 
@@ -280,21 +288,21 @@ static inline void trail(struct node **ptr,const int offset,const int pr,
  *pr => present base number we r dealing with...........
  */
 
-static inline void repete (struct node **ptr,const int offset,const int step,const int pr,
+static inline void repete (register struct node **ptr,const int offset,const int step,const int pr,
 			   const int idx,const int mask)
 {
 	struct node **limit;
-	limit = ptr+sieve_offset;
 	
-	///LOCK the mutex as struct node array will be modified
-	pthread_mutex_lock (&mutex_a);
+	limit = ptr + sieve_offset;
+	ptr = ptr + offset;
 	
-	for (ptr=ptr+offset ; ptr < limit  ; ptr=ptr+step) {
-		mpz_tdiv_q_ui ((*ptr)->q_x, (*ptr)->q_x, pr);			//update q_x
-		(*ptr)->v[idx] = (*ptr)->v[idx] ^ mask;				//update v
+	while (  ptr < limit ) {
+		//update q_x
+		mpz_divexact_ui ((*ptr)->q_x, (*ptr)->q_x, pr);
+		//update q
+		(*ptr)->v[idx] = (*ptr)->v[idx] ^ mask;
+		ptr = ptr + step;
 	}
-	///UNLOCK the mutex
-	pthread_mutex_unlock (&mutex_a);
 }
 
 
@@ -324,6 +332,7 @@ void print_table (struct node **ptr, int *prime, char *s, int num, int B)
 	gmp_fprintf (fp, "\n\n\n     m       Q(x)             vectors\n");
 	
 	for(i=0 ; (i<num) && ((*(ptr+i))!=NULL) ;i++){
+		
 		gmp_fprintf (fp, "%0Zd %0Zd\t\t", (*(ptr+i))->m, (*(ptr+i))->q_x);
 		if(!mpz_cmp_ui ((*(ptr+i))->q_x ,1))
 			sm_cnt++;
