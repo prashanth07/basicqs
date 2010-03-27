@@ -21,12 +21,12 @@ static void sieve();
 char *program_name;
 
 
-int mem_limit = 8;
+int mem_limit = 32;
 int prime_multiple = 2;
 int inp_base = 10;
 unsigned long int sieve_offset;
 int smooth_extra = 32;
-int nthread = 1;
+int nthread = 2;
 
 int main (int argc, char *argv[])
 {
@@ -294,14 +294,14 @@ static void print_usage(int exit_status)
 		"   or: %s [OPTIONS] -f INPUT_FILE_NAME.\n"
 		"Factorizes the number specified in the file, or otherwise. using basic quadratic sieve.\n"
 		"\nMandatory arguments to long options are mandatory for short options too.\n"
-		" -b, --base=BASE		specify the input base[BASE] default 10\n"
-		" -f, --infile=FILENAME		specify the input file containing number\n"
+		" -b, --base BASE		specify the input base[BASE] default 10\n"
+		" -f, --infile FILENAME		specify the input file containing number\n"
 		" -h, --help			display this help and exit\n"
-		" -m, --mem-limit=MEMSIZE	specify the memory limit(in MB) for program[refer README file]\n"
-		" -n, --number=NUMBER_STRING	specify the number to be factorised\n"
-		" -p, --prime-multiple=PRIME	specify the number of primes to use[refer README file]\n"
-		" -s, --smooth-extra=SMT        specify the additional smooth numbers to calculate.\n" 
-		" -t, --nthread=NTHREAD         specify the number of threads NTHREAD.\n"
+		" -m, --mem-limit MEMSIZE	specify the memory limit(in MB) for program[refer README file]\n"
+		" -n, --number NUMBER_STRING	specify the number to be factorised\n"
+		" -p, --prime-multiple PRIME	specify the number of primes to use[refer README file]\n"
+		" -s, --smooth-extra SMT        specify the additional smooth numbers to calculate.\n" 
+		" -t, --nthread NTHREAD         specify the number of threads NTHREAD.\n"
 		" -v, --verbose			prints all the info as program executes\n\n" 
 		,program_name, program_name);
 	

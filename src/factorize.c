@@ -15,9 +15,6 @@
 /*For some common definations*/
 #include "qfs.h"
 
-static inline void repete (register struct node **ptr, const int offset, const int step, const int pr,
-			  const int idx, const int mask);
-
 static inline void trail (struct node *ptr, const int pr, const int idx, const int mask);
 
 static void eratosthenes (struct node **start, int *prime, int B);
@@ -27,6 +24,7 @@ static void *threaded_factorize (void *param);
 
 extern unsigned long int sieve_offset;
 extern int nthread;		//defined in main.c contains the number of threads to be created
+int number_of_bits (unsigned int num);
 
 
 //Structure to pass data to each thread
@@ -144,26 +142,93 @@ void factorize (struct node **start, int *prime, int B)
 	//done
 }
 
+/*
+ *Returns the number of bits in unsigned integer
+ */
+int number_of_bits (unsigned int num)
+{
+	int ret=32;
+	int mask=0x80;
+
+	if (num & 0xFFFF0000)
+	{
+		ret=32;
+		num = num >> 16;
+		num = num & (0xFFFF);
+	}
+	else
+	{
+		ret = ret-16;
+	}
+
+
+	if (num & 0xFF00)
+	{
+		num = num >> 8;
+		num = num & 0xFF;
+	}
+	else
+	{
+		ret = ret - 8;
+	}
+
+	mask = 0x80;
+	while (mask)
+	{
+		if (num & mask)
+			break;
+		else
+			ret--;
+		mask=mask>>1;
+	}
+
+	return ret;
+}
+
 
 /*
  *This function implements eratosthenes sieve
  */
-
 static void eratosthenes (struct node **start, int *prime, int B)
 {
 	int i=0,j=0;
-	int level,step;
-	int t1;
+	int level;
+	int n_bits,k;
+	unsigned int step;
+	unsigned int *bit_array;
+	unsigned int total_number_of_bits=0;
 	
 	//current word accessing in v
 	int idx=0;
 	//masks the current bit accessed in a word
 	int mask=1;
-
 	
 	struct node **temp;
-	
-	for (i=0 ; i < B ; i++){
+
+	bit_array = (unsigned int *)malloc (sizeof(unsigned int) * sieve_offset);
+	bzero (bit_array, sizeof(unsigned int) * sieve_offset);
+
+        /*Make all nos poitive and set -1 bit in vector & calculate number of bits in each number*/
+	temp = start;
+	i = 0;
+	idx=0;  
+	mask=1;
+	while (i < sieve_offset) 
+	{
+		if (mpz_sgn ((*temp)->q_x) < 0) 
+		{
+			mpz_neg ((*temp)->q_x, (*temp)->q_x);		//update q_x
+			(*temp)->v[idx] = (*temp)->v[idx] ^ mask;	//update v
+		}
+		bit_array[i] = mpz_size ( (*temp)->q_x ) * WORD_SIZE;
+		temp++;
+		i++;
+	}
+	/*all are +ve nos now*/
+
+
+	for (i=1/*start from 2*/ ; i < B ; i++)
+	{
 		temp = start;
 		
 		/*if sieve_offset is smaller than the largest prime in prime set
@@ -172,56 +237,51 @@ static void eratosthenes (struct node **start, int *prime, int B)
 		 *i!=0 is reqd bcoz say sieve_offset=10000 and *(prime+i)=-1 (treated as unsigned int in comparision)
 		 *in the above case the we get no factors
 		 */
-		if (sieve_offset < *(prime+i) && i!=0 )
+		if (sieve_offset < *(prime+i))
 			break;
-		//On wordsize boundaries execute the loop
-		if ((i % WORD_SIZE == 0) && (i != 0) ) {
-			//icrement to point to next word
-			idx++;
-			//reinitialize mask to point to bit 0
-			mask=1;
-		}
-		
-		if (!i) {
-			/*if a number is negative make it positive and update vector*/
-			t1 = sieve_offset;
-			while (t1--) {
-				if (mpz_sgn ((*temp)->q_x) < 0) {
-					mpz_neg ((*temp)->q_x, (*temp)->q_x);		//update q_x
-					(*temp)->v[idx] = (*temp)->v[idx] ^ mask;	//update v
-				}
-				temp++;
+	
+		level=0;
+		n_bits = number_of_bits (*(prime+i));
+
+		for (j=0; j < *(prime+i) ;j++)
+		{
+			//If the number is divisble
+			/*level is required to determine the number of steps or
+			 *elements to be skipped for the erathosthenes sieve
+			 */
+			level=1;
+			step = *(prime+i);
+			while (mpz_divisible_ui_p ((*(temp+j))->q_x, step)) 
+			{
+				for (k=j; k<sieve_offset ; k=k+step)
+					bit_array[k] = bit_array[k] - n_bits;
+				
+				level++;
+				step =  *(prime+i) * step;
+				if (step < *(prime+i))  //overflow
+					break;
 			}
 		}
-		else {
-			level=0;
-			for (j=0; j < *(prime+i) ;j++){
-				//if number is not divisable continue
-				if (!mpz_divisible_ui_p((*(temp+j))->q_x, *(prime+i)))
-					continue;
-				//the number is divisble
-				else {
-					/*level is required to determine the number of steps or
-					 *elements to be skipped for the erathosthenes sieve
-					 */
-					level=0;
-					
-					while ((!level) || mpz_divisible_ui_p ((*(temp+j))->q_x, *(prime+i)) ) {
-						
-						level++;
-						step = pow (*(prime+i),level);
-						
-						//divide the rest of the series
-						repete (temp ,j ,step ,*(prime+i),idx, mask);
-					}
-				}
-			}
-		}
-		mask = mask << 1;	//update mask for next prime
 	}
+
+        /*Analyze bit_array and mark which q_x need not tried for factorization*/
+	total_number_of_bits=0;
+	for (i=0 ; i<sieve_offset ;i++)
+		total_number_of_bits += bit_array[i];
+
+	k = total_number_of_bits/sieve_offset; //Set threshold
+
+	temp = start;
+
+	for (i=0 ; i<sieve_offset ; i++)
+	{
+		if (bit_array[i] > k/2) //compare with threshold
+			mpz_set_ui ((*(temp+i))->q_x, 0);
+	}
+
+
+	free (bit_array);
 }
-
-
 
 
 static void *threaded_factorize (void *param)
@@ -234,7 +294,8 @@ static void *threaded_factorize (void *param)
 	
 	td = (struct thread_data *) param;
 		
-	for (i=td->thread_idx ; i < sieve_offset ; i += nthread){
+	for (i=td->thread_idx ; i < sieve_offset ; i += nthread)
+	{
 		//value of ptr is const and not the value pointed by it
 		register struct node * const ptr = *(td->start + i);
 		
@@ -243,10 +304,10 @@ static void *threaded_factorize (void *param)
 		//mask =2 as we are skipping -1 corresponding to mask=1
 		mask = 2;
 		
-		for (j=1 ; j < td->B ; j++) {
-			
-			//we need not check for j!=0 as in eratosthenes for obvoius reasons
-			if (j % WORD_SIZE == 0 ) {
+		for (j=1 ; j < td->B ; j++) 
+		{
+			if (j % WORD_SIZE == 0 ) 
+			{
 				idx++;
 				mask=1;
 			}
@@ -268,43 +329,36 @@ static void *threaded_factorize (void *param)
 static inline void trail (struct node * const ptr,  const int pr,
 			  const int idx,  const int mask)
 {
-	while( mpz_divisible_ui_p (ptr->q_x, pr)) {
-		//update q_x
-		mpz_divexact_ui ( (ptr)->q_x,  (ptr)->q_x  ,pr);
-		//update v
-		(ptr)->v[idx] = (ptr)->v[idx] ^ mask;
-	}
-}
+	unsigned int t1,t2;
 
+	if (mpz_cmp_ui(ptr->q_x, 0) == 0)
+		return;
 
-
-
+	t1 = pr;
+	t2 = 1;
 /*
- *Divides all the q_x of struct node in array p and updates the structure members
- *ptr =>  address of 0th element of main array
- *offset => position of starting point
- *step => no of elements to be skipped
- *M => sieving limit
- *pr => present base number we r dealing with...........
+ *Idea is to count what power of pr will divide ptr->q_x 
+ *Before actually dividing it.
  */
+	while(mpz_divisible_ui_p (ptr->q_x, t1)) 
+	{
+		(ptr)->v[idx] = (ptr)->v[idx] ^ mask;
+		t2 = t1;
+		t1 = t1 * pr;
 
-static inline void repete (register struct node **ptr,const int offset,const int step,const int pr,
-			   const int idx,const int mask)
-{
-	struct node **limit;
-	
-	limit = ptr + sieve_offset;
-	ptr = ptr + offset;
-	
-	while (  ptr < limit ) {
-		//update q_x
-		mpz_divexact_ui ((*ptr)->q_x, (*ptr)->q_x, pr);
-		//update q
-		(*ptr)->v[idx] = (*ptr)->v[idx] ^ mask;
-		ptr = ptr + step;
+		if (t1 < t2) /*Overflow in t1 so divide now*/
+		{
+			mpz_divexact_ui ( (ptr)->q_x,  (ptr)->q_x  ,t2);
+			t2 = 1;
+			t1 = pr;
+		}
+	}
+
+	if (t2 > 1)
+	{
+                mpz_divexact_ui ( (ptr)->q_x,  (ptr)->q_x  ,t2);		
 	}
 }
-
 
 #ifdef POIU_DEBUG
 /*
